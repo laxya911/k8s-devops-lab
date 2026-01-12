@@ -38,17 +38,31 @@ pipeline {
     // ========================================================================
     stages {
         // ====================================================================
-        // Stage 1: Checkout Code
+        // Stage 1: Checkout Code (Sparse - Only phase1-static-site)
         // ====================================================================
         stage('Checkout') {
             steps {
-                echo '📥 Checking out source code...'
-                // Checkout code from Git repository
-                checkout scm
+                echo '📥 Checking out phase1-static-site directory only...'
+                
+                // Sparse checkout - only clone the directory we need
+                // This is much faster than cloning the entire repository
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    extensions: [
+                        [$class: 'SparseCheckoutPaths', 
+                         sparseCheckoutPaths: [[path: 'phase1-static-site/*']]],
+                        [$class: 'CloneOption', depth: 1, shallow: true]
+                    ],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/laxya911/k8s-devops-lab.git'
+                    ]]
+                ])
                 
                 // Display build information
                 echo "Build Number: ${BUILD_NUMBER}"
                 echo "Image Tag: ${IMAGE_TAG}"
+                echo "Workspace: ${WORKSPACE}"
             }
         }
         
