@@ -22,9 +22,8 @@
   hosts: project_lab
   become: true
   gather_facts: true
-  
-  tasks:
 
+  tasks:
     # ==========================================================================
     # SYSTEM UPDATE & BASE PACKAGES
     # ==========================================================================
@@ -84,13 +83,13 @@
 
     - name: Set system hostname from inventory
       hostname:
-        name: "{{ inventory_hostname }}"
+        name: '{{ inventory_hostname }}'
 
     - name: Ensure hostname is in /etc/hosts
       lineinfile:
         path: /etc/hosts
-        regexp: "^127.0.1.1"
-        line: "127.0.1.1 {{ inventory_hostname }}"
+        regexp: '^127.0.1.1'
+        line: '127.0.1.1 {{ inventory_hostname }}'
         state: present
 
     # ==========================================================================
@@ -154,8 +153,7 @@
 
     - name: Display swap status
       debug:
-        msg: "{{ swap_status.stdout }}"
-
+        msg: '{{ swap_status.stdout }}'
 
     # ==========================================================================
     # QEMU GUEST AGENT
@@ -172,3 +170,32 @@
         enabled: yes
         state: started
 
+    # ======================================================================
+    # OPTIONAL: Install kubectl where needed (Jenkins host and build agents)
+    # Runs only on hosts that belong to the cicd or kubernetes groups.
+    # This keeps kubectl available for CI pipelines and agents that perform
+    # deployments. It will NOT run on unrelated hosts.
+    # ======================================================================
+
+    - name: Install kubectl stable binary
+      when: "'jenkins' in inventory_hostname"
+      block:
+        - name: Download latest kubectl stable version string
+          uri:
+            url: https://dl.k8s.io/release/stable.txt
+            return_content: yes
+          register: kubectl_version
+
+        - name: Download kubectl binary
+          get_url:
+            url: 'https://dl.k8s.io/release/{{ kubectl_version.content | trim }}/bin/linux/amd64/kubectl'
+            dest: /usr/local/bin/kubectl
+            mode: '0755'
+          become: true
+
+        - name: Verify kubectl installed
+          command: /usr/local/bin/kubectl version --client --short
+          register: kubectl_check
+          failed_when: kubectl_check.rc != 0
+          changed_when: false
+          ignore_errors: yes

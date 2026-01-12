@@ -30,12 +30,33 @@
         repo: 'deb https://pkg.jenkins.io/debian-stable binary/'
         state: present
 
-    - name: Install Java (required for Jenkins)
-      apt:
-        name:
-          - openjdk-11-jdk
-          - openjdk-11-jre
+    - name: Add Adoptium (Temurin) GPG key
+      apt_key:
+        url: https://packages.adoptium.net/artifactory/api/gpg/key/public
         state: present
+
+    - name: Add Adoptium (Temurin) apt repository
+      apt_repository:
+        repo: 'deb https://packages.adoptium.net/artifactory/deb {{ ansible_lsb.codename }} main'
+        state: present
+        filename: adoptium
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install Temurin (Java 21) if available
+      apt:
+        name: temurin-21-jdk
+        state: present
+      register: temurin_install
+      ignore_errors: yes
+
+    - name: Install OpenJDK 21 fallback
+      apt:
+        name: openjdk-21-jdk
+        state: present
+      when: temurin_install is failed
 
     - name: Install Jenkins
       apt:
@@ -47,6 +68,25 @@
         path: /etc/systemd/system/jenkins.service.d
         state: directory
         mode: '0755'
+
+    - name: Ensure Jenkins init.groovy.d directory exists
+      file:
+        path: /var/lib/jenkins/init.groovy.d
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0755'
+
+    - name: Disable executors on the controller (prevent builds on master)
+      copy:
+        dest: /var/lib/jenkins/init.groovy.d/01-disable-executors.groovy
+        content: |
+          import jenkins.model.*
+          Jenkins.instance.setNumExecutors(0)
+        owner: jenkins
+        group: jenkins
+        mode: '0644'
+      notify: Restart Jenkins
 
     - name: Configure Jenkins memory settings
       copy:
@@ -216,6 +256,38 @@
         port: '5000'
         proto: tcp
         comment: 'Docker registry (internal)'
+
+    # ========================================================================
+    # JENKINS AGENT USER & INBOUND AGENT PORT
+    # ========================================================================
+
+    - name: Create Jenkins agent user
+      user:
+        name: jenkins_agent
+        comment: 'Jenkins build agent user'
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Create .ssh dir for Jenkins agent user
+      file:
+        path: /home/jenkins_agent/.ssh
+        state: directory
+        owner: jenkins_agent
+        group: jenkins_agent
+        mode: '0700'
+
+    - name: Add authorized key for Jenkins agent (set variable `jenkins_agent_ssh_pubkey`)
+      authorized_key:
+        user: jenkins_agent
+        key: '{{ jenkins_agent_ssh_pubkey }}'
+      when: jenkins_agent_ssh_pubkey is defined
+
+    - name: Allow Jenkins inbound agent (JNLP) port 50000
+      ufw:
+        rule: allow
+        port: '50000'
+        proto: tcp
+        comment: 'Jenkins inbound agent port (JNLP)'
 
     # ========================================================================
     # CREATE CREDENTIALS FILES

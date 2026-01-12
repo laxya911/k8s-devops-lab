@@ -138,6 +138,9 @@ pipeline {
         // Stage 5: Deploy to Kubernetes
         // ====================================================================
         stage('Deploy to K8s') {
+            environment {
+                KUBECONFIG = '/home/terraform/.kube/config'
+            }
             steps {
                 echo '🚀 Deploying to Kubernetes...'
                 script {

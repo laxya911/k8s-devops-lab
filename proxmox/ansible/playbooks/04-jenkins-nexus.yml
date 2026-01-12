@@ -13,6 +13,7 @@
   vars:
     jenkins_port: 8080
     nexus_port: 8081
+    repo_port: 5000
     nexus_version: '3.70.0'
 
   tasks:
@@ -22,12 +23,12 @@
     - name: Allow Jenkins and Nexus ports
       ufw:
         rule: allow
-        port: "{{ item }}"
+        port: '{{ item }}'
         proto: tcp
       loop:
-        - "{{ jenkins_port }}"
-        - "{{ nexus_port }}"
-        - "5000"
+        - '{{ jenkins_port }}'
+        - '{{ nexus_port }}'
+        - '5000'
 
     - name: Allow loopback traffic
       ufw:
@@ -53,7 +54,7 @@
 
     - name: Add Docker repository
       apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        repo: 'deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable'
         state: present
 
     - name: Install Docker Engine
@@ -90,8 +91,21 @@
       apt:
         name:
           - fontconfig
-          - openjdk-17-jre
+          - openjdk-21-jre
         state: present
+    - name: Remove Java 25
+      apt:
+        name:
+          - openjdk-25-jre
+          - openjdk-25-jdk
+        state: absent
+
+    - name: Set JAVA_HOME for Jenkins
+      lineinfile:
+        path: /etc/default/jenkins
+        regexp: '^JAVA_HOME='
+        line: 'JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64'
+        create: yes
 
     - name: Install Jenkins
       apt:
@@ -129,22 +143,22 @@
     # ========================================================================
     # JENKINS INITIAL SETUP
     # ========================================================================
-    - name: Get Jenkins initial admin password
-      slurp:
-        src: /var/lib/jenkins/secrets/initialAdminPassword
-      register: jenkins_admin_password
-      retries: 10
-      delay: 15
+    # - name: Get Jenkins initial admin password
+    #   slurp:
+    #     src: /var/lib/jenkins/secrets/initialAdminPassword
+    #   register: jenkins_admin_password
+    #   retries: 10
+    #   delay: 15
 
-    - name: Display Jenkins admin password
-      debug:
-        msg: 'Jenkins Admin Password: {{ jenkins_admin_password.content | b64decode }}'
+    # - name: Display Jenkins admin password
+    #   debug:
+    #     msg: 'Jenkins Admin Password: {{ jenkins_admin_password.content | b64decode }}'
 
-    - name: Save Jenkins admin password to file
-      copy:
-        content: '{{ jenkins_admin_password.content | b64decode }}'
-        dest: /tmp/jenkins-admin-password.txt
-        mode: '0600'
+    # - name: Save Jenkins admin password to file
+    #   copy:
+    #     content: '{{ jenkins_admin_password.content | b64decode }}'
+    #     dest: /tmp/jenkins-admin-password.txt
+    #     mode: '0600'
 
     # ========================================================================
     # NEXUS INSTALLATION (DOCKER BASED)
@@ -158,6 +172,21 @@
         recurse: yes
         mode: '0755'
 
+    - name: Ensure ownership of nexus data directory (host UID match)
+      file:
+        path: /opt/nexus/data
+        owner: 200
+        group: 200
+        recurse: yes
+      become: true
+      changed_when: false
+
+    - name: Pull Nexus Docker image
+      docker_image:
+        name: 'sonatype/nexus3'
+        tag: '{{ nexus_version }}'
+        source: pull
+
     - name: Create Nexus container
       docker_container:
         name: nexus3
@@ -166,10 +195,12 @@
         restart_policy: always
         ports:
           - '{{ nexus_port }}:8081'
+          - '{{ repo_port }}:5000'
         volumes:
           - /opt/nexus/data:/nexus-data
         env:
           INSTALL4J_ADD_VM_PARAMS: '-Xms1g -Xmx1g'
+        pull: false
       notify: Restart Nexus
 
     - name: Wait for Nexus to start
@@ -182,26 +213,86 @@
     # NEXUS INITIAL CONFIGURATION
     # ========================================================================
 
-    - name: Wait for Nexus to fully initialize
-      pause:
-        seconds: 30
+    # - name: Wait for Nexus HTTP port to be available
+    #   wait_for:
+    #     port: '{{ nexus_port }}'
+    #     host: 127.0.0.1
+    #     delay: 10
+    #     timeout: 900
 
-    - name: Get Nexus admin password
-      shell: docker exec nexus3 cat /nexus-data/admin.password 2>/dev/null || echo "initializing"
-      register: nexus_admin_password
-      retries: 10
-      delay: 15
-      until: nexus_admin_password.stdout != "initializing"
+    # - name: Poll for Nexus admin password file inside container
+    #   shell: |
+    #     docker exec nexus3 sh -c 'if [ -f /nexus-data/admin.password ]; then cat /nexus-data/admin.password; else echo initializing; fi'
+    #   register: nexus_admin_password
+    #   retries: 20
+    #   delay: 5
+    #   until: nexus_admin_password.stdout != "initializing"
 
-    - name: Display Nexus admin password
-      debug:
-        msg: 'Nexus Admin Password: {{ nexus_admin_password.stdout }}'
+    # - name: Display Nexus admin password
+    #   debug:
+    #     msg: 'Nexus Admin Password: {{ nexus_admin_password.stdout }}'
 
-    - name: Save Nexus admin password to file
-      copy:
-        content: '{{ nexus_admin_password.stdout }}'
-        dest: /tmp/nexus-admin-password.txt
-        mode: '0600'
+    # - name: Save Nexus admin password to file
+    #   copy:
+    #     content: '{{ nexus_admin_password.stdout }}'
+    #     dest: /tmp/nexus-admin-password.txt
+    #     mode: '0600'
+
+    # - name: Set Nexus admin password fact
+    #   set_fact:
+    #     nexus_admin_pass: '{{ nexus_admin_password.stdout }}'
+
+    # - name: Wait for Nexus REST API to be ready
+    #   uri:
+    #     url: 'http://127.0.0.1:{{ nexus_port }}/service/metrics/ping'
+    #     method: GET
+    #     status_code: 200
+    #     return_content: yes
+    #     headers:
+    #       Accept: application/json
+    #   register: nexus_api_ping
+    #   retries: 10
+    #   delay: 6
+    #   until: nexus_api_ping.status == 200
+
+    # - name: Get existing repositories from Nexus
+    #   uri:
+    #     url: 'http://127.0.0.1:{{ nexus_port }}/service/rest/v1/repositories'
+    #     method: GET
+    #     user: admin
+    #     password: '{{ nexus_admin_pass }}'
+    #     force_basic_auth: yes
+    #     return_content: yes
+    #     status_code: 200
+    #   register: nexus_repos
+
+    # - name: Determine if docker-hosted repository exists
+    #   set_fact:
+    #     docker_repo_exists: "{{ (nexus_repos.json | selectattr('name','equalto','docker-hosted') | list) | length > 0 }}"
+
+    # - name: Create docker-hosted repository (HTTP port 5000) if missing
+    #   uri:
+    #     url: 'http://127.0.0.1:{{ nexus_port }}/service/rest/v1/repositories/docker/hosted'
+    #     method: POST
+    #     user: admin
+    #     password: '{{ nexus_admin_pass }}'
+    #     force_basic_auth: yes
+    #     headers:
+    #       Content-Type: application/json
+    #     body: |
+    #       {
+    #         "name": "docker-hosted",
+    #         "online": true,
+    #         "storage": {"blobStoreName": "default", "strictContentTypeValidation": true},
+    #         "docker": {"v1": false, "forceBasicAuth": false, "httpPort": {{ repo_port }}}
+    #       }
+    #     status_code: [201, 400]
+    #   when: not docker_repo_exists
+    #   register: create_docker_repo
+
+    # - name: Debug docker repo creation result
+    #   debug:
+    #     msg: "docker repo create: {{ create_docker_repo.status if create_docker_repo is defined else 'skipped' }}"
 
     # ========================================================================
     # JENKINS PLUGINS AND CONFIGURATION
@@ -240,7 +331,6 @@
         connected:
           - nexus3
         state: present
-
 
     # ========================================================================
     # CREATE CREDENTIALS FILES
@@ -357,9 +447,48 @@
           - '6. Change default passwords'
           - '========================================'
 
+    # kubectl is installed in the base prepare playbook when applicable
+
+
+    # ========================================================================
+    # CONFIGURE DOCKER FOR INSECURE NEXUS REGISTRY (HTTP)
+    # ========================================================================
+    - name: Create systemd override directory for Docker
+      file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Configure Docker daemon for Nexus insecure registry
+      copy:
+        dest: /etc/systemd/system/docker.service.d/override.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd --insecure-registry {{ ansible_host }}:{{ repo_port }}
+        mode: '0644'
+      notify: Reload Docker
+
+    - name: Create Docker daemon.json for insecure registry
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "insecure-registries": ["{{ ansible_host }}:{{ repo_port }}"]
+          }
+        mode: '0644'
+      notify: Reload Docker
+
   # ============================================================================
   # HANDLERS
   # ============================================================================
+
+  handlers:
+    - name: Reload Docker
+      systemd:
+        name: docker
+        state: restarted
+        daemon_reload: yes
 
   handlers:
     - name: Restart Jenkins
@@ -377,3 +506,36 @@
     - name: Reload Jenkins configuration
       shell: curl -X POST http://localhost:{{ jenkins_port }}/reload --user admin:admin -v
       ignore_errors: yes
+
+################################################################################
+# COPY KUBECONFIG FROM KUBE MASTER TO JENKINS HOST
+################################################################################
+
+- name: Deploy Kubernetes admin kubeconfig to Jenkins host
+  hosts: kube_master
+  gather_facts: false
+  tasks:
+    - name: Read cluster admin kubeconfig
+      slurp:
+        src: /etc/kubernetes/admin.conf
+      register: kube_admin_conf
+
+    - name: Ensure /var/lib/jenkins/.kube exists on Jenkins host
+      file:
+        path: /var/lib/jenkins/.kube
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: '0700'
+      delegate_to: jenkins-nexus
+      become: true
+
+    - name: Copy admin kubeconfig to Jenkins host
+      copy:
+        content: '{{ kube_admin_conf.content | b64decode }}'
+        dest: /var/lib/jenkins/.kube/config
+        owner: jenkins
+        group: jenkins
+        mode: '0600'
+      delegate_to: jenkins-nexus
+      become: true

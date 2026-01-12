@@ -9,7 +9,7 @@
   gather_facts: true
 
   vars:
-    k3s_version: "v1.28.3+k3s1"
+    k3s_version: 'v1.28.3+k3s1'
     k3s_install_script: /tmp/install_k3s.sh
     kubeconfig_dir: /home/ubuntu/.kube
     kubeconfig_path: /home/ubuntu/.kube/config
@@ -56,15 +56,15 @@
     - name: Download K3s install script
       get_url:
         url: https://get.k3s.io
-        dest: "{{ k3s_install_script }}"
+        dest: '{{ k3s_install_script }}'
         mode: '0700'
       when: not k3s_binary.stat.exists
 
     - name: Install K3s master
-      shell: "{{ k3s_install_script }}"
+      shell: '{{ k3s_install_script }}'
       when: not k3s_binary.stat.exists
       environment:
-        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_VERSION: '{{ k3s_version }}'
         INSTALL_K3S_EXEC: >-
           server
           --node-ip={{ ansible_host }}
@@ -85,7 +85,7 @@
     - name: Wait for K3s API port (6443) to be ready
       wait_for:
         port: 6443
-        host: "{{ ansible_host }}"
+        host: '{{ ansible_host }}'
         state: started
         timeout: 300
 
@@ -103,7 +103,7 @@
     # ============================================================================
     - name: Create kubeconfig directory
       file:
-        path: "{{ kubeconfig_dir }}"
+        path: '{{ kubeconfig_dir }}'
         state: directory
         owner: ubuntu
         group: ubuntu
@@ -112,7 +112,7 @@
     - name: Copy kubeconfig to ubuntu user
       copy:
         src: /etc/rancher/k3s/k3s.yaml
-        dest: "{{ kubeconfig_path }}"
+        dest: '{{ kubeconfig_path }}'
         owner: ubuntu
         group: ubuntu
         mode: '0600'
@@ -120,9 +120,9 @@
 
     - name: Update kubeconfig server IP
       replace:
-        path: "{{ kubeconfig_path }}"
+        path: '{{ kubeconfig_path }}'
         regexp: '127.0.0.1'
-        replace: "{{ ansible_host }}"
+        replace: '{{ ansible_host }}'
 
     # ============================================================================
     # NAMESPACES
@@ -146,10 +146,9 @@
 
     - name: Save worker token
       copy:
-        content: "{{ k3s_token.content | b64decode | trim }}"
+        content: '{{ k3s_token.content | b64decode | trim }}'
         dest: /tmp/k3s-token.txt
         mode: '0644'
-
 
     # ============================================================================
     # FINAL VERIFICATION
@@ -161,7 +160,7 @@
       register: cluster_info
 
     - debug:
-        msg: "{{ cluster_info.stdout }}"
+        msg: '{{ cluster_info.stdout }}'
 
     - name: Show node list
       shell: kubectl get nodes -o wide
@@ -170,4 +169,4 @@
       register: nodes
 
     - debug:
-        msg: "{{ nodes.stdout }}"
+        msg: '{{ nodes.stdout }}'
