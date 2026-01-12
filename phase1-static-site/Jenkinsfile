@@ -146,6 +146,10 @@ pipeline {
                 script {
                     // Update deployment with new image
                     sh """
+                        # Apply deployment and service YAMLs
+                        kubectl apply -f phase1-static-site/k8s/deployment.yaml --namespace=${K8S_NAMESPACE}
+                        kubectl apply -f phase1-static-site/k8s/service.yaml --namespace=${K8S_NAMESPACE}
+                        
                         # Set the new image in deployment
                         kubectl set image deployment/static-site \
                             nginx=${FULL_IMAGE_NAME} \
