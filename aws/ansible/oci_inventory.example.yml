@@ -1,0 +1,35 @@
+### Example Ansible OCI dynamic inventory (fill credentials or use environment variables)
+# This is an example template using the Oracle Cloud inventory plugin.
+# Install the provider collection if needed: ansible-galaxy collection install oracle.oci
+
+plugin: oracle.oci
+# Provide credentials via environment variables or fill below
+tenancy: "{{ lookup('env','OCI_TENANCY_OCID') }}"
+user: "{{ lookup('env','OCI_USER_OCID') }}"
+fingerprint: "{{ lookup('env','OCI_FINGERPRINT') }}"
+key_file: "{{ lookup('env','OCI_KEY_FILE') | default('~/.oci/oci_api_key.pem') }}"
+region: 'ap-mumbai-1'
+compartment_id: "{{ lookup('env','OCI_COMPARTMENT_OCID') }}"
+
+# Filter instances by display name pattern (adjust as needed)
+filters:
+  - name: display_name
+    comparison: CONTAINS
+    value: 'kube-'
+
+# Compose hostvars
+compose:
+  ansible_host: public_ip
+
+# Map groups by simple rules (examples)
+groups:
+  kubernetes_master: "'kube-master' in display_name"
+  kubernetes_workers: "'kube-worker' in display_name"
+  cicd: "'jenkins' in display_name or 'nexus' in display_name"
+  monitoring_servers: "'monitoring' in display_name"
+# Use private IPs if you want internal connectivity
+#compose:
+#  ansible_host: private_ip
+
+# Example: run with
+# ansible-inventory -i oci_inventory.example.yml --list

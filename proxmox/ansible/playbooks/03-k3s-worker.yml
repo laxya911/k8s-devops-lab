@@ -1,0 +1,140 @@
+################################################################################
+# ANSIBLE PLAYBOOK 3: KUBERNETES WORKER NODE SETUP
+# Installs K3s agent (worker node)
+################################################################################
+
+---
+- name: Setup Kubernetes Worker Nodes (K3s Agent)
+  hosts: kubernetes_workers
+  become: true
+  gather_facts: true
+
+  vars:
+    k3s_version: "v1.28.3+k3s1"
+
+  tasks:
+    # ============================================================================
+    # FIREWALL PREPARATION
+    # ============================================================================
+    - name: Allow K3s internal networking ports
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+      loop:
+        - { port: '10250', proto: 'tcp' }
+        - { port: '8472', proto: 'udp' }
+        - { port: '30000:32767', proto: 'tcp' }
+
+    - name: Allow loopback traffic
+      ufw:
+        rule: allow
+        interface: lo
+        direction: in
+
+    # ========================================================================
+    # GET K3S MASTER TOKEN
+    # ========================================================================
+    - name: Fetch K3s token from master
+      slurp:
+        src: /tmp/k3s-token.txt
+      register: k3s_token_content
+      delegate_to: kube-master
+      run_once: yes
+
+    - name: Set K3s token variable
+      set_fact:
+        k3s_token: "{{ k3s_token_content.content | b64decode | trim }}"
+
+    # ========================================================================
+    # K3S AGENT CONFIGURATION
+    # ========================================================================
+    - name: Create K3s configuration directory
+      file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0755'
+
+    - name: Create K3s Agent configuration
+      copy:
+        content: |
+          server: "https://{{ hostvars['kube-master']['ansible_host'] }}:6443"
+          token: "{{ k3s_token }}"
+          node-ip: "{{ ansible_host }}"
+          kubelet-arg:
+            - "max-pods=110"
+        dest: /etc/rancher/k3s/config.yaml
+        mode: '0600'
+
+    # ========================================================================
+    # K3S AGENT INSTALLATION
+    # ========================================================================
+    - name: Check if K3s agent is already installed
+      stat:
+        path: /usr/local/bin/k3s
+      register: k3s_agent_binary
+
+    - name: Download K3s install script
+      get_url:
+        url: https://get.k3s.io
+        dest: /tmp/install_k3s.sh
+        mode: '0700'
+
+    - name: Install K3s Agent (Worker)
+      shell: /tmp/install_k3s.sh
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: "agent"
+
+    - name: Enable and start K3s agent service
+      systemd:
+        name: k3s-agent
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    # ========================================================================
+    # WAIT FOR NODE TO JOIN CLUSTER
+    # ========================================================================
+    - name: Wait for worker node to join cluster
+      shell: |
+        kubectl get nodes | grep {{ inventory_hostname }}
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      delegate_to: kube-master
+      register: node_join_result
+      until: node_join_result.rc == 0
+      retries: 30
+      delay: 10
+
+    # ========================================================================
+    # LABEL WORKER NODES
+    # ========================================================================
+    - name: Label worker node
+      shell: |
+        kubectl label nodes {{ inventory_hostname }} \
+        node-role.kubernetes.io/worker=true \
+        workload-type=general
+      environment:
+        KUBECONFIG: /home/ubuntu/.kube/config
+      delegate_to: kube-master
+      ignore_errors: yes
+
+    # ========================================================================
+    # VERIFICATION
+    # ========================================================================
+    - name: Check K3s agent status
+      systemd:
+        name: k3s-agent
+      register: k3s_agent_status
+
+    - name: Display K3s agent status
+      debug:
+        msg: "K3s Agent on {{ inventory_hostname }} is {{ 'active' if k3s_agent_status.status.ActiveState == 'active' else 'inactive' }}"
+
+    - name: View K3s agent logs (summary)
+      shell: journalctl -u k3s-agent -n 10 --no-pager
+      register: k3s_logs
+
+    - debug:
+        msg: "{{ k3s_logs.stdout }}"

@@ -1,0 +1,79 @@
+################################################################################
+# EXAMPLE TERRAFORM VARIABLES
+# Copy to terraform.tfvars and fill in your actual values
+# DO NOT commit terraform.tfvars to git (it's in .gitignore)
+################################################################################
+
+# ============================================================================
+# ORACLE CLOUD CREDENTIALS
+# Get from OCI Console > Profile > Tenancy
+# ============================================================================
+
+tenancy_ocid = "ocid1.tenancy.oc1..aaaaaaaXXXXXXXXXXX"
+
+# Your SSH public key - Get from: cat ~/.ssh/id_rsa.pub
+# Include entire key starting with "ssh-rsa"
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCXXXXXXXXXXXXX user@hostname"
+
+# Region
+oci_region = "ap-mumbai-1"
+
+# ============================================================================
+# INSTANCE NAMES
+# ============================================================================
+
+kube_master_display_name   = "kube-master"
+kube_worker_1_display_name = "kube-worker-1"
+kube_worker_2_display_name = "kube-worker-2"
+jenkins_nexus_display_name = "jenkins-nexus"
+monitoring_display_name    = "monitoring"
+
+# ============================================================================
+# RESOURCE SIZING (DO NOT CHANGE - OPTIMIZED FOR FREE TIER)
+# ============================================================================
+
+# Master Node (1.5 OCPU, 8GB RAM)
+kube_master_ocpu           = 1.5
+kube_master_memory_gb      = 8
+kube_master_boot_volume_gb = 50
+
+# Worker 1 (1 OCPU, 6GB RAM)
+kube_worker_1_ocpu           = 1
+kube_worker_1_memory_gb      = 6
+kube_worker_1_boot_volume_gb = 50
+
+# Worker 2 (Micro - Fixed 1/8 OCPU, 1GB RAM)
+kube_worker_2_boot_volume_gb = 50
+
+# Jenkins + Nexus (1 OCPU, 8GB RAM)
+jenkins_nexus_ocpu           = 1
+jenkins_nexus_memory_gb      = 8
+jenkins_nexus_boot_volume_gb = 50
+
+# Monitoring (Micro - Fixed 1/8 OCPU, 1GB RAM)
+monitoring_boot_volume_gb = 50
+
+# ============================================================================
+# NETWORKING (DO NOT CHANGE)
+# ============================================================================
+
+vcn_display_name = "k8s-devops-vcn"
+vcn_cidr         = "10.0.0.0/16"
+
+subnet_display_name = "k8s-devops-subnet"
+subnet_cidr         = "10.0.1.0/24"
+
+# ============================================================================
+# FEATURES
+# ============================================================================
+
+enable_public_ip_master  = true   # Recommended for SSH access
+enable_public_ip_jenkins = true   # Required for GitHub webhooks
+
+# ============================================================================
+# TAGS (For resource organization)
+# ============================================================================
+
+environment = "dev"
+project_name = "k8s-devops-lab"
+created_by  = "terraform"

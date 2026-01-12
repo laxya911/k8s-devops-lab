@@ -1,0 +1,217 @@
+################################################################################
+# ANSIBLE PLAYBOOK 1: PREPARE BASE SYSTEMS
+# Updates packages, installs prerequisites, configures system
+################################################################################
+
+---
+- name: Prepare all systems for Kubernetes
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    # ========================================================================
+    # SYSTEM UPDATES
+    # ========================================================================
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Install basic packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - vim
+          - htop
+          - net-tools
+          - ntp
+          - ca-certificates
+          - apt-transport-https
+          - software-properties-common
+          - jq
+          - unzip
+          - python3-pip
+          - python3-venv
+        state: present
+
+    # ========================================================================
+    # KERNEL CONFIGURATION FOR KUBERNETES
+    # ========================================================================
+
+    - name: Load kernel modules required for Kubernetes
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Persist kernel modules
+      copy:
+        content: |
+          overlay
+          br_netfilter
+        dest: /etc/modules-load.d/kubernetes.conf
+
+    - name: Set kernel parameters for Kubernetes
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_set: yes
+        state: present
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: '1' }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: '1' }
+        - { name: 'net.ipv4.ip_forward', value: '1' }
+        - { name: 'vm.overcommit_memory', value: '1' }
+
+    # ========================================================================
+    # DISABLE SWAP (Required for Kubernetes)
+    # ========================================================================
+
+    - name: Disable swap immediately
+      shell: swapoff -a
+
+    - name: Remove swap from fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\s+swap\s+.*)$'
+        replace: '# \1'
+
+    # ========================================================================
+    # TIMEZONE AND NTP
+    # ========================================================================
+
+    - name: Set timezone to UTC
+      shell: timedatectl set-timezone UTC
+
+    - name: Restart NTP service
+      service:
+        name: ntp
+        state: restarted
+        enabled: yes
+
+    # ========================================================================
+    # HOSTNAME CONFIGURATION
+    # ========================================================================
+
+    - name: Set hostname from inventory
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Add hostname to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        regexp: "^127.0.0.1.*"
+        line: "127.0.0.1 localhost {{ inventory_hostname }}"
+        state: present
+
+    # ========================================================================
+    # DOCKER INSTALLATION
+    # ========================================================================
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=arm64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: ansible_machine == 'aarch64'
+
+    - name: Add Docker repository (x86)
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: ansible_machine == 'x86_64'
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+
+    - name: Enable and start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    # ========================================================================
+    # KUBELET CONFIGURATION
+    # ========================================================================
+
+    - name: Create kubelet directory
+      file:
+        path: /etc/sysconfig
+        state: directory
+
+    - name: Configure kubelet environment
+      copy:
+        content: "KUBELET_EXTRA_ARGS=\"--cgroup-driver=cgroupfs\"\n"
+        dest: /etc/sysconfig/kubelet
+
+    # ========================================================================
+    # SECURITY HARDENING
+    # ========================================================================
+
+    - name: Configure UFW firewall (if needed)
+      ufw:
+        state: enabled
+        default: deny
+        direction: incoming
+
+    - name: Enable SSH
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+
+    # ========================================================================
+    # VERIFICATION
+    # ========================================================================
+
+    - name: Verify Docker installation
+      shell: docker --version
+      register: docker_version
+
+    - name: Display Docker version
+      debug:
+        msg: "{{ docker_version.stdout }}"
+
+    - name: Verify swap is disabled
+      shell: free | grep Swap | awk '{print $2}'
+      register: swap_size
+
+    - name: Assert swap is disabled
+      assert:
+        that:
+          - swap_size.stdout == '0'
+        fail_msg: "Swap is not disabled!"
+
+  handlers:
+    - name: Restart docker
+      service:
+        name: docker
+        state: restarted

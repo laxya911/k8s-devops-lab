@@ -1,0 +1,379 @@
+################################################################################
+# ANSIBLE PLAYBOOK 4: JENKINS + NEXUS CI/CD SETUP
+# Installs Docker, Jenkins, and Nexus repository manager
+# CORRECTED VERSION - All tasks and handlers properly formatted
+################################################################################
+
+---
+- name: Setup CI/CD Stack (Jenkins + Nexus)
+  hosts: jenkins_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    jenkins_port: 8080
+    nexus_port: 8081
+    nexus_version: '3.70.0'
+
+  tasks:
+    # ========================================================================
+    # FIREWALL PREPARATION
+    # ========================================================================
+    - name: Allow Jenkins and Nexus ports
+      ufw:
+        rule: allow
+        port: "{{ item }}"
+        proto: tcp
+      loop:
+        - "{{ jenkins_port }}"
+        - "{{ nexus_port }}"
+        - "5000"
+
+    - name: Allow loopback traffic
+      ufw:
+        rule: allow
+        interface: lo
+        direction: in
+
+    # ========================================================================
+    # DOCKER INSTALLATION (Required for Nexus)
+    # ========================================================================
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Ensure Docker is started
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    # ========================================================================
+    # JENKINS INSTALLATION
+    # ========================================================================
+    - name: Add Jenkins GPG key
+      apt_key:
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+        state: present
+
+    - name: Add Jenkins repository
+      apt_repository:
+        repo: 'deb https://pkg.jenkins.io/debian-stable binary/'
+        state: present
+
+    - name: Install Java (required for Jenkins)
+      apt:
+        name:
+          - fontconfig
+          - openjdk-17-jre
+        state: present
+
+    - name: Install Jenkins
+      apt:
+        name: jenkins
+        state: present
+
+    - name: Create Jenkins systemd service override directory
+      file:
+        path: /etc/systemd/system/jenkins.service.d
+        state: directory
+        mode: '0755'
+
+    - name: Configure Jenkins memory settings
+      copy:
+        content: |
+          [Service]
+          Environment="JENKINS_JAVA_OPTS=-Xmx2g -Xms1g"
+        dest: /etc/systemd/system/jenkins.service.d/override.conf
+        mode: '0644'
+      notify: Restart Jenkins
+
+    - name: Reload systemd and start Jenkins
+      systemd:
+        name: jenkins
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for Jenkins to start
+      wait_for:
+        port: '{{ jenkins_port }}'
+        delay: 5
+        timeout: 300
+
+    # ========================================================================
+    # JENKINS INITIAL SETUP
+    # ========================================================================
+    - name: Get Jenkins initial admin password
+      slurp:
+        src: /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_admin_password
+      retries: 10
+      delay: 15
+
+    - name: Display Jenkins admin password
+      debug:
+        msg: 'Jenkins Admin Password: {{ jenkins_admin_password.content | b64decode }}'
+
+    - name: Save Jenkins admin password to file
+      copy:
+        content: '{{ jenkins_admin_password.content | b64decode }}'
+        dest: /tmp/jenkins-admin-password.txt
+        mode: '0600'
+
+    # ========================================================================
+    # NEXUS INSTALLATION (DOCKER BASED)
+    # ========================================================================
+    - name: Create nexus data directory
+      file:
+        path: /opt/nexus/data
+        state: directory
+        owner: 200
+        group: 200
+        recurse: yes
+        mode: '0755'
+
+    - name: Create Nexus container
+      docker_container:
+        name: nexus3
+        image: 'sonatype/nexus3:{{ nexus_version }}'
+        state: started
+        restart_policy: always
+        ports:
+          - '{{ nexus_port }}:8081'
+        volumes:
+          - /opt/nexus/data:/nexus-data
+        env:
+          INSTALL4J_ADD_VM_PARAMS: '-Xms1g -Xmx1g'
+      notify: Restart Nexus
+
+    - name: Wait for Nexus to start
+      wait_for:
+        port: '{{ nexus_port }}'
+        delay: 30
+        timeout: 600
+
+    # ========================================================================
+    # NEXUS INITIAL CONFIGURATION
+    # ========================================================================
+
+    - name: Wait for Nexus to fully initialize
+      pause:
+        seconds: 30
+
+    - name: Get Nexus admin password
+      shell: docker exec nexus3 cat /nexus-data/admin.password 2>/dev/null || echo "initializing"
+      register: nexus_admin_password
+      retries: 10
+      delay: 15
+      until: nexus_admin_password.stdout != "initializing"
+
+    - name: Display Nexus admin password
+      debug:
+        msg: 'Nexus Admin Password: {{ nexus_admin_password.stdout }}'
+
+    - name: Save Nexus admin password to file
+      copy:
+        content: '{{ nexus_admin_password.stdout }}'
+        dest: /tmp/nexus-admin-password.txt
+        mode: '0600'
+
+    # ========================================================================
+    # JENKINS PLUGINS AND CONFIGURATION
+    # ========================================================================
+
+    - name: Install Jenkins plugins using API
+      shell: |
+        curl -X POST -d '<jenkins><install-plugin>{{ item }}/latest</install-plugin></jenkins>' \
+          -H 'Content-Type: text/xml' \
+          http://localhost:8080/pluginManager/installNecessaryPlugins
+      loop:
+        - kubernetes
+        - docker-plugin
+        - docker-pipeline
+        - github-branch-source
+        - pipeline-stage-view
+        - credentials
+        - credentials-binding
+        - git
+      ignore_errors: yes
+      retries: 3
+      delay: 10
+
+    # ========================================================================
+    # DOCKER NETWORK FOR JENKINS
+    # ========================================================================
+
+    - name: Create Docker network for CI/CD
+      docker_network:
+        name: cicd-network
+        state: present
+
+    - name: Connect Nexus to network
+      docker_network:
+        name: cicd-network
+        connected:
+          - nexus3
+        state: present
+
+
+    # ========================================================================
+    # CREATE CREDENTIALS FILES
+    # ========================================================================
+
+    - name: Create credentials info file
+      copy:
+        content: |
+          ============================================
+          CI/CD Stack Credentials
+          ============================================
+
+          JENKINS:
+          URL: http://{{ ansible_host }}:{{ jenkins_port }}
+          Username: admin
+          Password: See /tmp/jenkins-admin-password.txt
+
+          NEXUS:
+          URL: http://{{ ansible_host }}:{{ nexus_port }}
+          Username: admin
+          Password: See /tmp/nexus-admin-password.txt
+
+          Default repositories:
+          - docker (proxy)
+          - maven-central (proxy)
+          - nuget.org-proxy (proxy)
+          - maven-releases (hosted)
+          - maven-snapshots (hosted)
+
+          ============================================
+          IMPORTANT: Change default passwords immediately!
+          ============================================
+        dest: /tmp/cicd-credentials.txt
+        mode: '0600'
+
+    # ========================================================================
+    # SERVICE HEALTH CHECK
+    # ========================================================================
+
+    - name: Check Jenkins service status
+      systemd:
+        name: jenkins
+      register: jenkins_service_status
+
+    - name: Check Nexus container status
+      docker_container_info:
+        name: nexus3
+      register: nexus_container_status
+
+    - name: Test Jenkins connectivity
+      uri:
+        url: 'http://localhost:{{ jenkins_port }}'
+        method: GET
+        status_code: [200, 403]
+      register: jenkins_response
+      retries: 3
+      delay: 5
+
+    - name: Test Nexus connectivity
+      uri:
+        url: 'http://localhost:{{ nexus_port }}'
+        method: GET
+        status_code: [200, 302]
+      register: nexus_response
+      retries: 5
+      delay: 10
+
+    # ========================================================================
+    # DISPLAY VERIFICATION RESULTS
+    # ========================================================================
+
+    - name: Display Jenkins status
+      debug:
+        msg:
+          - "Jenkins Service: {{ 'Active' if jenkins_service_status.status.ActiveState == 'active' else 'Inactive' }}"
+          - 'Jenkins URL: http://{{ ansible_host }}:{{ jenkins_port }}'
+          - 'Status Code: {{ jenkins_response.status }}'
+
+    - name: Display Nexus status
+      debug:
+        msg:
+          - 'Nexus Container: {{ nexus_container_status.container.State.Status }}'
+          - 'Nexus URL: http://{{ ansible_host }}:{{ nexus_port }}'
+          - 'Status Code: {{ nexus_response.status }}'
+
+    - name: Display credential file location
+      debug:
+        msg:
+          - 'Credentials saved to: /tmp/cicd-credentials.txt'
+          - 'Jenkins password: /tmp/jenkins-admin-password.txt'
+          - 'Nexus password: /tmp/nexus-admin-password.txt'
+          - 'RETRIEVE THESE IMMEDIATELY after deployment'
+
+    # ========================================================================
+    # INSTALLATION SUMMARY
+    # ========================================================================
+
+    - name: Display installation summary
+      debug:
+        msg:
+          - '========================================'
+          - 'CI/CD Stack Installation Summary'
+          - '========================================'
+          - 'Jenkins: RUNNING on port {{ jenkins_port }}'
+          - 'Nexus: RUNNING on port {{ nexus_port }}'
+          - 'Docker Network: cicd-network created'
+          - '========================================'
+          - 'Next Steps:'
+          - '1. Access Jenkins at http://{{ ansible_host }}:{{ jenkins_port }}'
+          - '2. Enter admin password from /tmp/jenkins-admin-password.txt'
+          - '3. Install suggested plugins'
+          - '4. Configure Kubernetes plugin'
+          - '5. Access Nexus at http://{{ ansible_host }}:{{ nexus_port }}'
+          - '6. Change default passwords'
+          - '========================================'
+
+  # ============================================================================
+  # HANDLERS
+  # ============================================================================
+
+  handlers:
+    - name: Restart Jenkins
+      systemd:
+        name: jenkins
+        state: restarted
+        daemon_reload: yes
+
+    - name: Restart Nexus
+      docker_container:
+        name: nexus3
+        state: started
+        restart: yes
+
+    - name: Reload Jenkins configuration
+      shell: curl -X POST http://localhost:{{ jenkins_port }}/reload --user admin:admin -v
+      ignore_errors: yes

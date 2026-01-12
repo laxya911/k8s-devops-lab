@@ -1,0 +1,28 @@
+plugin: oracle.oci.oci
+# Credentials from environment variables or ~/.oci/config
+# tenancy: ...
+# user: ...
+# fingerprint: ...
+# key_file: ...
+
+# Limit query to this region
+region: ap-mumbai-1
+
+# Filter for instances in your compartment
+compartment_id: "{{ lookup('env', 'OCI_COMPARTMENT_OCID') }}"
+
+# Only include running instances
+filters:
+  - lifecycle_state: "RUNNING"
+
+# Group instances based on their display name
+groups:
+  kubernetes_master: "'kube-master' in display_name"
+  kubernetes_workers: "'kube-worker' in display_name"
+  jenkins_servers: "'jenkins' in display_name"
+  # monitoring_servers group removed as instance is gone
+
+# Use public IP for Ansible connection
+compose:
+  ansible_host: public_ip
+  ansible_user: "'ubuntu'"
