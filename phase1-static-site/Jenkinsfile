@@ -40,51 +40,33 @@ pipeline {
         // ====================================================================
         // Stage 1: Checkout Code (Sparse - Only phase1-static-site)
         // ====================================================================
-        stage('Checkout') {
-            steps {
-                echo '📥 Checking out phase1-static-site directory only...'
-                
-                // Sparse checkout - only clone the directory we need
-                // This is much faster than cloning the entire repository
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: '*/main']],
-                    extensions: [
-                        [$class: 'SparseCheckoutPaths', 
-                         sparseCheckoutPaths: [[path: 'phase1-static-site/*']]],
-                        [$class: 'CloneOption', depth: 1, shallow: true]
-                    ],
-                    userRemoteConfigs: [[
-                        url: 'https://github.com/laxya911/k8s-devops-lab.git'
-                    ]]
-                ])
-                
-                // Display build information
-                echo "Build Number: ${BUILD_NUMBER}"
-                echo "Image Tag: ${IMAGE_TAG}"
-                echo "Workspace: ${WORKSPACE}"
-            }
-        }
+stage('Checkout') {
+    steps {
+        echo '📥 Using default SCM checkout...'
+        checkout scm
+        sh 'ls -R'
+        echo "Workspace: ${WORKSPACE}"
+    }
+}
+
         
         // ====================================================================
         // Stage 2: Build Docker Image
         // ====================================================================
-        stage('Build Image') {
-            steps {
-                echo '🔨 Building Docker image...'
-                script {
-                    // Build Docker image
-                    // -t: Tag the image
-                    // --no-cache: Don't use cache (optional, remove for faster builds)
-                    sh """
-                        cd phase1-static-site
-                        docker build -t ${FULL_IMAGE_NAME} .
-                        docker tag ${FULL_IMAGE_NAME} ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest
-                    """
-                }
-                echo "✅ Image built: ${FULL_IMAGE_NAME}"
-            }
+       stage('Build Image') {
+    steps {
+        echo '🔨 Building Docker image...'
+        script {
+            sh """
+                cd phase1-static-site
+                docker build -t ${FULL_IMAGE_NAME} .
+                docker tag ${FULL_IMAGE_NAME} ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest
+            """
         }
+        echo "✅ Image built: ${FULL_IMAGE_NAME}"
+    }
+}
+
         
         // ====================================================================
         // Stage 3: Test Image
