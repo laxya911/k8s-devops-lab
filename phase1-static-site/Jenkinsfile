@@ -40,21 +40,69 @@ pipeline {
         }
         
         stage('Test Image') {
-            steps {
-                echo '🧪 Testing Docker image...'
-                script {
-                    sh """
-                        docker rm -f test-container || true
-                        docker run -d --name test-container -p 8888:80 ${FULL_IMAGE_NAME}
-                        sleep 5
-                        curl -f http://localhost:8888 || exit 1
-                        docker stop test-container
-                        docker rm test-container
-                    """
-                }
-                echo '✅ Docker image test passed'
-            }
+    steps {
+        echo '🧪 Testing Docker image...'
+        script {
+            sh """
+                # Remove any existing test-container from previous runs
+                docker rm -f test-container || true
+                
+                # Start container in background
+                echo "Starting test container..."
+                docker run -d --name test-container -p 8888:80 ${FULL_IMAGE_NAME}
+                
+                # Get container ID for reference
+                CONTAINER_ID=\$(docker ps -q -f name=test-container)
+                echo "Container ID: \$CONTAINER_ID"
+                
+                # Wait longer for Nginx to fully start
+                echo "Waiting for Nginx service to start (15 seconds)..."
+                sleep 15
+                
+                # Verify container is still running
+                echo "Checking if container is running..."
+                if ! docker ps -f name=test-container --quiet | grep -q .; then
+                    echo "ERROR: Container stopped unexpectedly!"
+                    echo "Container logs:"
+                    docker logs test-container || true
+                    exit 1
+                fi
+                
+                echo "Container is running. Testing HTTP connectivity..."
+                
+                # Try to connect with retries (up to 5 attempts, 3 seconds apart)
+                RETRY_COUNT=0
+                MAX_RETRIES=5
+                while [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; do
+                    RETRY_COUNT=\$((RETRY_COUNT + 1))
+                    echo "Connection attempt \$RETRY_COUNT of \$MAX_RETRIES..."
+                    
+                    if curl -f -m 5 http://localhost:8888 > /dev/null 2>&1; then
+                        echo "✓ Successfully connected to Nginx service on port 8888"
+                        break
+                    fi
+                    
+                    if [ \$RETRY_COUNT -lt \$MAX_RETRIES ]; then
+                        echo "Connection failed. Waiting 3 seconds before retry..."
+                        sleep 3
+                    else
+                        echo "ERROR: Failed to connect after \$MAX_RETRIES attempts"
+                        echo "Container logs for debugging:"
+                        docker logs test-container || true
+                        exit 1
+                    fi
+                done
+                
+                # Cleanup: stop and remove test container
+                echo "Cleaning up test container..."
+                docker stop test-container || true
+                docker rm test-container || true
+            """
         }
+        echo '✅ Docker image test passed successfully'
+    }
+}
+
         
         stage('Push to Nexus') {
             steps {
