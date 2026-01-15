@@ -1,370 +1,142 @@
 // ============================================================================
 // Jenkins Pipeline for Phase 1: Static Website
 // ============================================================================
-// Purpose: CI/CD pipeline for building, testing, and deploying the static 
-//          website to Kubernetes (K3s) cluster
-// 
-// Key Features:
-//  - Checkout code from GitHub
-//  - Build Docker image from Dockerfile
-//  - Test Docker image with curl
-//  - Push image to Nexus Docker registry
-//  - Deploy to Kubernetes cluster
-//  - Verify deployment status
-//  - Clean up local Docker images
-// ============================================================================
 
 pipeline {
-    
-    // ========================================================================
-    // Agent Configuration
-    // ========================================================================
-    // Run on any available Jenkins agent (master or worker node)
     agent any
     
-    // ========================================================================
-    // Environment Variables
-    // ========================================================================
-    // These variables are available in all stages and scripts
     environment {
-        // Nexus Docker Registry Configuration
-        NEXUS_REGISTRY = '192.168.0.33:5000'        // Nexus registry address
-        NEXUS_REPO = 'docker-hosted'                // Repository name in Nexus
-        
-        // Docker Image Configuration
-        IMAGE_NAME = 'static-site'                  // Image name
-        IMAGE_TAG = "${BUILD_NUMBER}"               // Use Jenkins build number as tag
+        NEXUS_REGISTRY = '192.168.0.33:5000'
+        NEXUS_REPO = 'docker-hosted'
+        IMAGE_NAME = 'static-site'
+        IMAGE_TAG = "${BUILD_NUMBER}"
         FULL_IMAGE_NAME = "${NEXUS_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-        
-        // Kubernetes Configuration
-        K8S_NAMESPACE = 'default'                   // Kubernetes namespace for deployment
-        
-        // Kubeconfig Path (absolute path on Jenkins host, mounted into container)
-        KUBECONFIG = '/home/ansible/.kube/config'   // Path to kubeconfig file
+        K8S_NAMESPACE = 'default'
     }
     
-    // ========================================================================
-    // Pipeline Stages
-    // ========================================================================
     stages {
-        
-        // ====================================================================
-        // Stage 1: Checkout Source Code from GitHub
-        // ====================================================================
         stage('Checkout') {
             steps {
                 echo '📥 Checking out source code from GitHub...'
-                
-                // Use default SCM configuration from job settings
                 checkout scm
-                
-                // Display workspace structure for debugging
                 sh 'ls -R'
-                
-                // Print workspace path
                 echo "Workspace path: ${WORKSPACE}"
             }
         }
         
-        // ====================================================================
-        // Stage 2: Build Docker Image
-        // ====================================================================
         stage('Build Image') {
             steps {
                 echo '🔨 Building Docker image...'
-                
                 script {
                     sh """
-                        # Navigate to phase1-static-site directory
                         cd phase1-static-site
-                        
-                        # Build Docker image with version tag
                         docker build -t ${FULL_IMAGE_NAME} .
-                        
-                        # Also tag as 'latest' for easy reference
                         docker tag ${FULL_IMAGE_NAME} ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest
-                        
-                        # Display built image info
                         docker images | grep static-site
                     """
                 }
-                
                 echo "✅ Docker image built successfully: ${FULL_IMAGE_NAME}"
             }
         }
         
-        // ====================================================================
-        // Stage 3: Test Docker Image
-        // ====================================================================
         stage('Test Image') {
             steps {
                 echo '🧪 Testing Docker image...'
-                
                 script {
                     sh """
-                        # Remove any leftover test container from previous runs
                         docker rm -f test-container || true
-                        
-                        # Start test container in background (-d flag)
-                        # Map port 8888 on host to port 80 in container (-p 8888:80)
                         docker run -d --name test-container -p 8888:80 ${FULL_IMAGE_NAME}
-                        
-                        # Wait for Nginx to start and be ready
                         sleep 5
-                        
-                        # Test if the web server is responding
-                        # -f flag: fail if HTTP response is not 2xx or 3xx
                         curl -f http://localhost:8888 || exit 1
-                        
-                        # Cleanup: stop the test container
                         docker stop test-container
-                        
-                        # Cleanup: remove the test container
                         docker rm test-container
                     """
                 }
-                
                 echo '✅ Docker image test passed'
             }
         }
         
-        // ====================================================================
-        // Stage 4: Push Image to Nexus Registry
-        // ====================================================================
         stage('Push to Nexus') {
             steps {
                 echo '📤 Pushing Docker image to Nexus registry...'
-                
                 script {
                     sh """
-                        # Push image with build number tag
                         echo "Pushing ${FULL_IMAGE_NAME}..."
                         docker push ${FULL_IMAGE_NAME}
-                        
-                        # Push image with 'latest' tag for easy reference
                         echo "Pushing ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest..."
                         docker push ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest
                     """
                 }
-                
                 echo "✅ Docker image pushed to Nexus successfully"
             }
         }
         
-        // ====================================================================
-        // Stage 5: Deploy to Kubernetes Cluster
-        // ====================================================================
         stage('Deploy to K8s') {
             environment {
-                // Override KUBECONFIG for this stage (kubeconfig must be present on host)
                 KUBECONFIG = '/home/ansible/.kube/config'
             }
-            
             steps {
                 echo '🚀 Deploying application to Kubernetes cluster...'
-                
                 script {
                     sh """
-                        # Apply Kubernetes deployment manifest
                         echo "Creating/updating Kubernetes deployment..."
                         kubectl apply -f phase1-static-site/k8s/deployment.yaml --namespace=${K8S_NAMESPACE}
-                        
-                        # Apply Kubernetes service manifest
                         echo "Creating/updating Kubernetes service..."
                         kubectl apply -f phase1-static-site/k8s/service.yaml --namespace=${K8S_NAMESPACE}
-                        
-                        # Update the deployment with the new Docker image
                         echo "Updating deployment with new image: ${FULL_IMAGE_NAME}..."
-                        kubectl set image deployment/static-site \
-                            nginx=${FULL_IMAGE_NAME} \
-                            --namespace=${K8S_NAMESPACE} \
-                            --record
-                        
-                        # Wait for rollout to complete (timeout: 5 minutes)
+                        kubectl set image deployment/static-site nginx=${FULL_IMAGE_NAME} --namespace=${K8S_NAMESPACE} --record
                         echo "Waiting for rollout to complete..."
-                        kubectl rollout status deployment/static-site \
-                            --namespace=${K8S_NAMESPACE} \
-                            --timeout=5m
+                        kubectl rollout status deployment/static-site --namespace=${K8S_NAMESPACE} --timeout=5m
                     """
                 }
-                
                 echo '✅ Kubernetes deployment successful'
             }
         }
         
-        // ====================================================================
-        // Stage 6: Verify Deployment
-        // ====================================================================
         stage('Verify') {
             steps {
                 echo '✔️ Verifying Kubernetes deployment...'
-                
                 script {
                     sh """
-                        # Display deployment status
                         echo "=== Deployment Status ==="
                         kubectl get deployment static-site --namespace=${K8S_NAMESPACE}
-                        
-                        # Display running pods
                         echo ""
                         echo "=== Running Pods ==="
                         kubectl get pods -l app=static-site --namespace=${K8S_NAMESPACE}
-                        
-                        # Display service information (including NodePort if applicable)
                         echo ""
                         echo "=== Service Information ==="
                         kubectl get svc static-site --namespace=${K8S_NAMESPACE}
                     """
                 }
-                
                 echo '✅ Deployment verification complete'
             }
         }
     }
     
-    // ========================================================================
-    // Post-Build Actions
-    // ========================================================================
-    // These blocks run after all stages complete (success, failure, or unstable)
     post {
-        
-        // Always run cleanup regardless of build status
         always {
             echo '🧹 Cleaning up local Docker images...'
-            
             script {
-                // Force remove Docker images to save disk space
-                // -f flag: force removal even if image is in use
-                // || true: don't fail build if image doesn't exist
                 sh """
                     echo "Removing Docker image: ${FULL_IMAGE_NAME}"
                     docker rmi -f ${FULL_IMAGE_NAME} || true
-                    
                     echo "Removing Docker image: ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest"
                     docker rmi -f ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest || true
-                    
                     echo "Cleanup complete"
                 """
             }
         }
         
-        // Run if build completes successfully
         success {
             echo '✅ Pipeline completed successfully!'
-            echo ""
-            echo "=== Deployment Summary ==="
             echo "Image Name: ${FULL_IMAGE_NAME}"
             echo "Nexus Registry: ${NEXUS_REGISTRY}"
             echo "Kubernetes Namespace: ${K8S_NAMESPACE}"
-            echo ""
-            echo "To access the application:"
-            echo "1. Get NodePort: kubectl get svc static-site --namespace=${K8S_NAMESPACE}"
-            echo "2. Application URL: http://<NODE_IP>:<NODEPORT>"
-            echo ""
-            echo "For more details, check the Kubernetes cluster."
         }
         
-        // Run if build fails
         failure {
             echo '❌ Pipeline failed!'
-            echo ""
-            echo "=== Troubleshooting Steps ==="
-            echo "1. Check console output above for error details"
-            echo "2. Verify Docker daemon is running on Jenkins host"
-            echo "3. Verify kubeconfig is accessible at: /home/ansible/.kube/config"
-            echo "4. Verify Nexus registry is accessible: ${NEXUS_REGISTRY}"
-            echo "5. Check Kubernetes cluster connectivity: kubectl cluster-info"
-            echo ""
-            echo "Common issues:"
-            echo "  - Docker socket permission denied: Jenkins needs docker group permissions"
-            echo "  - kubectl not found: Docker/kubectl binaries must be mounted in Jenkins container"
-            echo "  - Kubeconfig not found: Copy kubeconfig from k8s master to host"
-            echo "  - Port 8888 in use: Check if another process is using the test port"
+            echo "Check console output above for error details"
         }
     }
 }
-
-// ============================================================================
-// Pipeline Documentation
-// ============================================================================
-/*
-
-SETUP INSTRUCTIONS
-==================
-
-1. Prerequisites on Jenkins Host:
-   - Docker daemon installed and running
-   - kubectl binary available (or mounted in Jenkins container)
-   - Kubeconfig file at /home/ansible/.kube/config
-   - Nexus Docker registry running and accessible at 192.168.0.33:5000
-
-2. Create Jenkins Pipeline Job:
-   a) Go to Jenkins Dashboard → "New Item"
-   b) Enter job name: "static-site-pipeline"
-   c) Select "Pipeline" job type
-   d) Click "OK"
-
-3. Configure Git SCM:
-   a) Under "Pipeline" section
-   b) Definition: "Pipeline script from SCM"
-   c) SCM: "Git"
-   d) Repository URL: https://github.com/laxya911/k8s-devops-lab.git
-   e) Branch: */main
-   f) Script Path: phase1-static-site/Jenkinsfile
-   g) Lightweight checkout: CHECKED (enabled)
-   h) Click "Save"
-
-4. Install Required Jenkins Plugins:
-   - Docker Pipeline
-   - Kubernetes CLI
-   - Git plugin (usually pre-installed)
-
-5. Build the Pipeline:
-   - Click "Build Now" to trigger the first build
-   - Monitor console output for progress
-
-EXPECTED OUTPUTS
-================
-
-Build Number Format:
-  - Image name: 192.168.0.33:5000/static-site:1 (for build #1)
-  - Also tagged as: 192.168.0.33:5000/static-site:latest
-
-Kubernetes Deployment:
-  - Deployment: static-site
-  - Namespace: default
-  - Service Type: NodePort (see deployment.yaml)
-
-TROUBLESHOOTING
-===============
-
-Issue: "docker: not found"
-  Solution: Docker CLI binary not mounted in Jenkins container
-  Fix: Mount /srv/jenkins-tools/docker-cli:/usr/local/bin/docker:ro in Docker run command
-
-Issue: "kubectl: not found"
-  Solution: kubectl binary not mounted in Jenkins container
-  Fix: Mount /srv/jenkins-tools/kubectl:/usr/local/bin/kubectl:ro in Docker run command
-
-Issue: "permission denied while trying to connect to Docker daemon socket"
-  Solution: Jenkins container user doesn't have Docker group permissions
-  Fix: Run Jenkins container as --user root or add group permissions
-
-Issue: "no kubeconfig found"
-  Solution: Kubeconfig not present at /home/ansible/.kube/config
-  Fix: Copy kubeconfig from k8s master node to host: 
-       scp user@k8s-master:/home/user/.kube/config /home/ansible/.kube/config
-
-Issue: "container name already in use"
-  Solution: Previous test container not cleaned up
-  Fix: Manual cleanup: docker rm -f test-container
-
-MAINTENANCE
-===========
-
-- Clean Docker images regularly to save disk space (cleanup runs automatically)
-- Update kubeconfig if k8s cluster credentials change
-- Monitor Nexus registry disk usage
-- Review Jenkins logs for pipeline failures: /opt/jenkins/logs/
-
-*/
