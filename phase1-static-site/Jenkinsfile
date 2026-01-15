@@ -95,7 +95,6 @@ stage('Checkout') {
         }
         echo '✅ Image test passed'
     }
-}
 
         }
         
