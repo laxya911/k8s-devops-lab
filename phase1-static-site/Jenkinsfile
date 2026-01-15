@@ -72,27 +72,31 @@ stage('Checkout') {
         // Stage 3: Test Image
         // ====================================================================
         stage('Test Image') {
-            steps {
-                echo '🧪 Testing Docker image...'
-                script {
-                    // Run container temporarily to test
-                    sh """
-                        # Start container in background
-                        docker run -d --name test-container -p 8888:80 ${FULL_IMAGE_NAME}
-                        
-                        # Wait for container to start
-                        sleep 5
-                        
-                        # Test if Nginx is responding
-                        curl -f http://localhost:8888 || exit 1
-                        
-                        # Cleanup test container
-                        docker stop test-container
-                        docker rm test-container
-                    """
-                }
-                echo '✅ Image test passed'
-            }
+    steps {
+        echo '🧪 Testing Docker image...'
+        script {
+            sh """
+                # Remove any existing test-container
+                docker rm -f test-container || true
+                
+                # Start container in background
+                docker run -d --name test-container -p 8888:80 ${FULL_IMAGE_NAME}
+                
+                # Wait for container to start
+                sleep 5
+                
+                # Test if Nginx is responding
+                curl -f http://localhost:8888 || exit 1
+                
+                # Cleanup test container
+                docker stop test-container
+                docker rm test-container
+            """
+        }
+        echo '✅ Image test passed'
+    }
+}
+
         }
         
         // ====================================================================
