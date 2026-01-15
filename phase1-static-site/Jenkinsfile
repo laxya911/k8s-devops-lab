@@ -121,7 +121,7 @@ stage('Checkout') {
         // ====================================================================
         stage('Deploy to K8s') {
             environment {
-                KUBECONFIG = '/home/terraform/.kube/config'
+                KUBECONFIG = '/home/ansible/.kube/config'
             }
             steps {
                 echo '🚀 Deploying to Kubernetes...'
@@ -175,17 +175,17 @@ stage('Checkout') {
     // Post-Build Actions
     // ========================================================================
     post {
-        // Always run cleanup
-        always {
-            echo '🧹 Cleaning up...'
-            script {
-                // Remove local Docker images to save space
-                sh """
-                    docker rmi ${FULL_IMAGE_NAME} || true
-                    docker rmi ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest || true
-                """
-            }
+    always {
+        echo '🧹 Cleaning up...'
+        script {
+            // Remove local Docker images to save space (force remove)
+            sh """
+                docker rmi -f ${FULL_IMAGE_NAME} || true
+                docker rmi -f ${NEXUS_REGISTRY}/${IMAGE_NAME}:latest || true
+            """
         }
+    }
+
         
         // On successful build
         success {
