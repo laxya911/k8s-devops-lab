@@ -11,7 +11,7 @@ pipeline {
         IMAGE_NAME = 'static-site'
         IMAGE_TAG = "${BUILD_NUMBER}"
         FULL_IMAGE_NAME = "${NEXUS_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
-        K8S_NAMESPACE = 'default'
+        K8S_NAMESPACE = 'jenkins'
     }
     
     stages {
